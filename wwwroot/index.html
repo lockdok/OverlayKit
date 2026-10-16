@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OverlayKit — OBS Input Overlay</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main id="controlPage" class="control-page">
+    <header class="control-header">
+      <div>
+        <p class="eyebrow">OVERLAYKIT · OBS INPUT OVERLAY</p>
+        <h1>Overlay controls</h1>
+      </div>
+      <span id="connectionStatus" class="connection-status">Connecting…</span>
+    </header>
+
+    <section class="panel">
+      <h2>Keyboard display</h2>
+      <label class="field">
+        <span>Display style</span>
+        <select id="displayMode">
+          <option value="text" selected>Text keys</option>
+          <option value="keyboard">Keyboard layout</option>
+        </select>
+      </label>
+      <label class="check-field">
+        <input id="showKeyboard" type="checkbox" checked>
+        <span>Show keyboard input</span>
+      </label>
+      <label class="field">
+        <span>Recent input fade <output id="fadeValue"></output></span>
+        <input id="fadeMilliseconds" type="range" min="250" max="5000" step="50" value="1200">
+      </label>
+    </section>
+
+    <section class="panel">
+      <h2>Mouse display</h2>
+      <label class="check-field">
+        <input id="showMouse" type="checkbox" checked>
+        <span>Show mouse clicks and scrolls</span>
+      </label>
+      <p class="hint">Left, middle and right clicks highlight on a mouse diagram. Scroll direction appears briefly alongside it.</p>
+    </section>
+
+    <section class="panel panel-row">
+      <div>
+        <h2>Overlay visibility</h2>
+        <p class="hint">Hide the overlay without removing the OBS browser source.</p>
+      </div>
+      <button id="toggleOverlay" class="button secondary" type="button">Hide overlay</button>
+    </section>
+
+    <section class="panel source-panel">
+      <h2>OBS browser source URL</h2>
+      <div class="url-row">
+        <code id="overlayUrl">http://127.0.0.1:17893/?mode=overlay</code>
+        <button id="copyUrl" class="button secondary" type="button">Copy</button>
+      </div>
+      <p class="hint">Add a Browser source in OBS and paste this URL. Set its width and height to fit your scene.</p>
+    </section>
+
+    <footer class="privacy-note">
+      <strong>Input privacy:</strong> ordinary letters and numbers are hidden unless Ctrl, Alt, or Win is held.
+      Typed text is never read or sent. Shift is shown, but Shift alone does not reveal typed characters. F1–F12 and named special keys can appear on their own.
+      Input capture is local to this computer and continues while this app is running.
+    </footer>
+    <div id="controlError" class="error-message" role="status" aria-live="polite"></div>
+  </main>
+
+  <main id="overlayPage" class="overlay-page" aria-label="Keyboard and mouse input overlay">
+    <div id="overlayContent" class="overlay-content">
+      <section id="keyboardPanel" class="keyboard-panel">
+        <div id="textView" class="text-view">
+          <div class="view-label">KEYS</div>
+          <div id="heldKeys" class="held-keys" aria-live="polite"></div>
+          <div id="recentKeys" class="recent-keys"></div>
+        </div>
+        <div id="keyboardView" class="keyboard-view">
+          <div class="view-label">KEYBOARD</div>
+          <div id="keyboardLayout" class="keyboard-layout"></div>
+        </div>
+      </section>
+
+      <section id="mousePanel" class="mouse-panel" aria-label="Mouse activity">
+        <div class="mouse" aria-hidden="true">
+          <div id="mouseLeft" class="mouse-button mouse-left"></div>
+          <div id="mouseRight" class="mouse-button mouse-right"></div>
+          <div id="mouseWheel" class="mouse-wheel"></div>
+        </div>
+        <div class="mouse-activity">
+          <div id="mouseClickLabel" class="mouse-click-label"></div>
+          <div id="scrollLabel" class="scroll-label"></div>
+        </div>
+      </section>
+    </div>
+    <div id="overlayConnection" class="overlay-connection">Waiting for companion app…</div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
