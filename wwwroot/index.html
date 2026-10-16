@@ -44,6 +44,62 @@
       <p class="hint">Left, middle and right clicks highlight on a mouse diagram. Scroll direction appears briefly alongside it.</p>
     </section>
 
+    <section class="panel">
+      <h2>Overlay position and size</h2>
+      <p class="hint">Position is the overlay's anchor point within the OBS Browser source: 0% is left/top and 100% is right/bottom. The matching point on the overlay stays in place as you resize it.</p>
+      <label class="field">
+        <span>Horizontal position <output id="positionXValue"></output></span>
+        <input id="positionX" type="range" min="0" max="100" step="1" value="0">
+      </label>
+      <label class="field">
+        <span>Vertical position <output id="positionYValue"></output></span>
+        <input id="positionY" type="range" min="0" max="100" step="1" value="100">
+      </label>
+      <label class="field">
+        <span>Layout size <output id="layoutScaleValue"></output></span>
+        <input id="layoutScalePercent" type="range" min="50" max="300" step="5" value="150">
+      </label>
+      <label class="field">
+        <span>Font size <output id="fontSizeValue"></output></span>
+        <input id="fontSize" type="range" min="10" max="36" step="1" value="16">
+      </label>
+    </section>
+
+    <section class="panel">
+      <h2>Overlay appearance</h2>
+      <label class="field">
+        <span>Font family</span>
+        <select id="fontFamily">
+          <option value="Segoe UI">Segoe UI</option>
+          <option value="Arial">Arial</option>
+          <option value="Verdana">Verdana</option>
+          <option value="Georgia">Georgia</option>
+          <option value="Consolas">Consolas</option>
+          <option value="Trebuchet MS">Trebuchet MS</option>
+        </select>
+      </label>
+      <label class="color-field">
+        <span>Text color</span>
+        <input id="textColor" type="color" value="#f1f4f8">
+      </label>
+      <label class="color-field">
+        <span>Key highlight and accent</span>
+        <input id="accentColor" type="color" value="#71e0b2">
+      </label>
+      <label class="color-field">
+        <span>Key surface color</span>
+        <input id="keyColor" type="color" value="#293342">
+      </label>
+      <label class="color-field">
+        <span>Panel color</span>
+        <input id="panelColor" type="color" value="#0e1219">
+      </label>
+      <label class="field">
+        <span>Panel opacity <output id="panelOpacityValue"></output></span>
+        <input id="panelOpacity" type="range" min="0" max="100" step="1" value="86">
+      </label>
+    </section>
+
     <section class="panel panel-row">
       <div>
         <h2>Overlay visibility</h2>
@@ -55,10 +111,10 @@
     <section class="panel source-panel">
       <h2>OBS browser source URL</h2>
       <div class="url-row">
-        <code id="overlayUrl">http://127.0.0.1:17893/?mode=overlay</code>
+        <code id="overlayUrl"></code>
         <button id="copyUrl" class="button secondary" type="button">Copy</button>
       </div>
-      <p class="hint">Add a Browser source in OBS and paste this URL. Set its width and height to fit your scene.</p>
+      <p class="hint">Add a Browser source in OBS and paste this URL. Set its width and height to fit your scene; arrange and resize the overlay above.</p>
     </section>
 
     <footer class="privacy-note">
@@ -70,30 +126,32 @@
   </main>
 
   <main id="overlayPage" class="overlay-page" aria-label="Keyboard and mouse input overlay">
-    <div id="overlayContent" class="overlay-content">
-      <section id="keyboardPanel" class="keyboard-panel">
-        <div id="textView" class="text-view">
-          <div class="view-label">KEYS</div>
-          <div id="heldKeys" class="held-keys" aria-live="polite"></div>
-          <div id="recentKeys" class="recent-keys"></div>
-        </div>
-        <div id="keyboardView" class="keyboard-view">
-          <div class="view-label">KEYBOARD</div>
-          <div id="keyboardLayout" class="keyboard-layout"></div>
-        </div>
-      </section>
+    <div class="overlay-stage">
+      <div id="overlayContent" class="overlay-content">
+        <section id="keyboardPanel" class="keyboard-panel">
+          <div id="textView" class="text-view">
+            <div class="view-label">KEYS</div>
+            <div id="heldKeys" class="held-keys" aria-live="polite"></div>
+            <div id="recentKeys" class="recent-keys"></div>
+          </div>
+          <div id="keyboardView" class="keyboard-view">
+            <div class="view-label">KEYBOARD</div>
+            <div id="keyboardLayout" class="keyboard-layout"></div>
+          </div>
+        </section>
 
-      <section id="mousePanel" class="mouse-panel" aria-label="Mouse activity">
-        <div class="mouse" aria-hidden="true">
-          <div id="mouseLeft" class="mouse-button mouse-left"></div>
-          <div id="mouseRight" class="mouse-button mouse-right"></div>
-          <div id="mouseWheel" class="mouse-wheel"></div>
-        </div>
-        <div class="mouse-activity">
-          <div id="mouseClickLabel" class="mouse-click-label"></div>
-          <div id="scrollLabel" class="scroll-label"></div>
-        </div>
-      </section>
+        <section id="mousePanel" class="mouse-panel" aria-label="Mouse activity">
+          <div class="mouse" aria-hidden="true">
+            <div id="mouseLeft" class="mouse-button mouse-left"></div>
+            <div id="mouseRight" class="mouse-button mouse-right"></div>
+            <div id="mouseWheel" class="mouse-wheel"></div>
+          </div>
+          <div class="mouse-activity">
+            <div id="mouseClickLabel" class="mouse-click-label"></div>
+            <div id="scrollLabel" class="scroll-label"></div>
+          </div>
+        </section>
+      </div>
     </div>
     <div id="overlayConnection" class="overlay-connection">Waiting for companion app…</div>
   </main>

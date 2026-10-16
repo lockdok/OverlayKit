@@ -104,8 +104,28 @@ h2 {
 
 .field output {
   float: right;
-  color: var(--accent);
+  color: var(--control-accent, var(--accent));
   font-variant-numeric: tabular-nums;
+}
+
+.color-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 4px 0 14px;
+  color: #dce2ea;
+  font-size: 14px;
+}
+
+.color-field input[type="color"] {
+  width: 52px;
+  height: 34px;
+  padding: 3px;
+  border: 1px solid #3a4655;
+  border-radius: 7px;
+  background: #10141b;
+  cursor: pointer;
 }
 
 select {
@@ -194,18 +214,34 @@ input[type="range"] {
 }
 
 .overlay-page {
-  min-height: 100vh;
+  position: relative;
+  width: 100vw;
+  height: 100vh;
   overflow: hidden;
-  padding: 20px;
   background: transparent;
+  color: var(--overlay-text-color, #f1f4f8);
+  font-family: var(--overlay-font-family, "Segoe UI"), Arial, sans-serif;
+  font-size: var(--overlay-font-size, 16px);
+}
+
+.overlay-stage {
+  position: absolute;
+  inset: 18px;
+  overflow: hidden;
 }
 
 .overlay-content {
+  position: absolute;
+  top: var(--overlay-y, 100%);
+  left: var(--overlay-x, 0%);
   display: flex;
   align-items: flex-end;
   gap: 16px;
   width: fit-content;
   max-width: 100%;
+  transform: scale(var(--overlay-scale, 1.5))
+    translate(calc(var(--overlay-x-offset, 0%) * -1), calc(var(--overlay-y-offset, 100%) * -1));
+  transform-origin: top left;
 }
 
 .keyboard-panel,
@@ -213,13 +249,15 @@ input[type="range"] {
   padding: 14px;
   border: 1px solid rgb(255 255 255 / 15%);
   border-radius: 12px;
-  background: rgb(14 18 25 / 86%);
+  background: var(--overlay-panel-background, #0e1219db);
   box-shadow: 0 8px 28px rgb(0 0 0 / 30%);
   backdrop-filter: blur(6px);
 }
 
 .view-label {
   margin-bottom: 10px;
+  color: var(--overlay-accent-color, #71e0b2);
+  font-size: .7em;
 }
 
 .text-view {
@@ -243,9 +281,9 @@ input[type="range"] {
   padding: 4px 9px;
   border: 1px solid #536174;
   border-radius: 6px;
-  color: #fff;
-  background: #293342;
-  font-size: 14px;
+  color: var(--overlay-text-color, #f1f4f8);
+  background: var(--overlay-key-color, #293342);
+  font-size: 1em;
   font-weight: 650;
 }
 
@@ -256,9 +294,9 @@ input[type="range"] {
 .recent-key {
   min-height: 23px;
   padding: 2px 7px;
-  color: #b9c7d8;
-  background: #202833;
-  font-size: 12px;
+  color: color-mix(in srgb, var(--overlay-text-color, #f1f4f8) 72%, transparent);
+  background: color-mix(in srgb, var(--overlay-key-color, #293342) 76%, transparent);
+  font-size: .75em;
   animation: recent-in .16s ease-out;
 }
 
@@ -282,16 +320,16 @@ input[type="range"] {
   padding: 0 6px;
   border: 1px solid #485363;
   border-radius: 5px;
-  color: #dbe2eb;
-  background: #252e3b;
-  font-size: 11px;
+  color: var(--overlay-text-color, #f1f4f8);
+  background: var(--overlay-key-color, #293342);
+  font-size: .7em;
   font-weight: 600;
   transition: background-color .08s, border-color .08s, transform .08s;
 }
 
 .keyboard-key.wide {
   flex-grow: 1.5;
-  font-size: 10px;
+  font-size: .62em;
 }
 
 .keyboard-key.space {
@@ -300,20 +338,20 @@ input[type="range"] {
 
 .keyboard-key.pressed {
   transform: translateY(1px);
-  border-color: var(--accent);
-  color: #0d2118;
-  background: var(--accent);
+  border-color: var(--overlay-accent-color, #71e0b2);
+  color: #10141b;
+  background: var(--overlay-accent-color, #71e0b2);
 }
 
 .keyboard-key.recent {
-  border-color: var(--accent);
-  color: #d8ffed;
-  background: #315849;
+  border-color: var(--overlay-accent-color, #71e0b2);
+  color: var(--overlay-text-color, #f1f4f8);
+  background: color-mix(in srgb, var(--overlay-accent-color, #71e0b2) 32%, var(--overlay-key-color, #293342));
 }
 
 .keyboard-key.pressed.recent {
-  color: #0d2118;
-  background: var(--accent);
+  color: #10141b;
+  background: var(--overlay-accent-color, #71e0b2);
 }
 
 .mouse-panel {
@@ -328,7 +366,7 @@ input[type="range"] {
   height: 68px;
   border: 2px solid #8793a3;
   border-radius: 22px 22px 18px 18px;
-  background: #252e3b;
+  background: var(--overlay-key-color, #293342);
 }
 
 .mouse::after {
@@ -348,7 +386,7 @@ input[type="range"] {
   width: 17px;
   height: 24px;
   border-radius: 14px 4px 3px 3px;
-  background: #394657;
+  background: color-mix(in srgb, var(--overlay-key-color, #293342) 72%, white);
 }
 
 .mouse-left {
@@ -362,8 +400,8 @@ input[type="range"] {
 
 .mouse-button.active,
 .mouse-wheel.active {
-  background: var(--accent);
-  box-shadow: 0 0 12px rgb(113 224 178 / 70%);
+  background: var(--overlay-accent-color, #71e0b2);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--overlay-accent-color, #71e0b2) 70%, transparent);
 }
 
 .mouse-wheel {
@@ -379,8 +417,8 @@ input[type="range"] {
 
 .mouse-activity {
   min-width: 64px;
-  color: #f1f4f8;
-  font-size: 12px;
+  color: var(--overlay-text-color, #f1f4f8);
+  font-size: .75em;
   font-weight: 650;
 }
 
@@ -390,7 +428,7 @@ input[type="range"] {
 }
 
 .scroll-label {
-  color: var(--accent);
+  color: var(--overlay-accent-color, #71e0b2);
 }
 
 .scroll-pulse {
@@ -405,7 +443,7 @@ input[type="range"] {
   border-radius: 5px;
   color: #fff;
   background: rgb(153 72 50 / 90%);
-  font-size: 11px;
+  font-size: .7em;
 }
 
 @keyframes recent-in {
@@ -420,10 +458,6 @@ input[type="range"] {
 
   .panel {
     padding: 16px;
-  }
-
-  .overlay-page {
-    padding: 8px;
   }
 
   .overlay-content {

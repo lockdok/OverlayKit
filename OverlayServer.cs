@@ -10,13 +10,28 @@ namespace OverlayKit;
 
 internal sealed class OverlayServer : IAsyncDisposable
 {
-    private const int Port = 17893;
     private const int MaxMessageSize = 16 * 1024;
     private const int MaxHeaderSize = 16 * 1024;
-    private readonly TcpListener _listener = new(IPAddress.Loopback, Port);
+    private readonly TcpListener _listener;
     private readonly ConcurrentDictionary<Guid, BrowserClient> _clients = new();
     private readonly object _settingsLock = new();
     private OverlaySettings _settings = OverlaySettings.Load();
+
+    public OverlayServer()
+    {
+        var portValue = Environment.GetEnvironmentVariable("OVERLAYKIT_PORT");
+        var port = 17893;
+        if (!string.IsNullOrWhiteSpace(portValue)
+            && (!int.TryParse(portValue, out port) || port is < 1024 or > 65535))
+        {
+            throw new InvalidOperationException("OVERLAYKIT_PORT must be an integer from 1024 through 65535.");
+        }
+
+        Port = port;
+        _listener = new TcpListener(IPAddress.Loopback, Port);
+    }
+
+    public int Port { get; }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -391,16 +406,123 @@ internal sealed class OverlayServer : IAsyncDisposable
             }
         }
 
+        var positionX = current.PositionX;
+        if (!TryGetInt(element, "positionX", ref positionX, 0, 100, out error))
+        {
+            return false;
+        }
+
+        var positionY = current.PositionY;
+        if (!TryGetInt(element, "positionY", ref positionY, 0, 100, out error))
+        {
+            return false;
+        }
+
+        var layoutScalePercent = current.LayoutScalePercent;
+        if (!TryGetInt(element, "layoutScalePercent", ref layoutScalePercent, 50, 300, out error))
+        {
+            return false;
+        }
+
+        var fontSize = current.FontSize;
+        if (!TryGetInt(element, "fontSize", ref fontSize, 10, 36, out error))
+        {
+            return false;
+        }
+
+        var panelOpacity = current.PanelOpacity;
+        if (!TryGetInt(element, "panelOpacity", ref panelOpacity, 0, 100, out error))
+        {
+            return false;
+        }
+
+        if (!TryGetString(element, "fontFamily", current.FontFamily, out var fontFamily)
+            || !OverlaySettings.FontFamilies.Contains(fontFamily, StringComparer.Ordinal))
+        {
+            error = "Choose a font from the supported font list.";
+            return false;
+        }
+
+        if (!TryGetColor(element, "textColor", current.TextColor, out var textColor)
+            || !TryGetColor(element, "accentColor", current.AccentColor, out var accentColor)
+            || !TryGetColor(element, "keyColor", current.KeyColor, out var keyColor)
+            || !TryGetColor(element, "panelColor", current.PanelColor, out var panelColor))
+        {
+            error = "Colors must be six-digit hex values such as #F1F4F8.";
+            return false;
+        }
+
         updated = new OverlaySettings
         {
             DisplayMode = mode,
             ShowKeyboard = showKeyboard,
             ShowMouse = showMouse,
             OverlayVisible = overlayVisible,
-            FadeMilliseconds = fadeMilliseconds
+            FadeMilliseconds = fadeMilliseconds,
+            PositionX = positionX,
+            PositionY = positionY,
+            LayoutScalePercent = layoutScalePercent,
+            FontFamily = fontFamily,
+            FontSize = fontSize,
+            TextColor = textColor,
+            AccentColor = accentColor,
+            KeyColor = keyColor,
+            PanelColor = panelColor,
+            PanelOpacity = panelOpacity
         };
         error = "";
         return true;
+    }
+
+    private static bool TryGetInt(
+        JsonElement element,
+        string name,
+        ref int value,
+        int minimum,
+        int maximum,
+        out string error)
+    {
+        error = "Invalid settings value.";
+        if (!element.TryGetProperty(name, out var property))
+        {
+            return true;
+        }
+
+        if (!property.TryGetInt32(out var parsed) || parsed < minimum || parsed > maximum)
+        {
+            error = $"{name} must be between {minimum} and {maximum}.";
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    private static bool TryGetString(JsonElement element, string name, string current, out string value)
+    {
+        value = current;
+        if (!element.TryGetProperty(name, out var property))
+        {
+            return true;
+        }
+
+        if (property.ValueKind != JsonValueKind.String || property.GetString() is not { } parsed)
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    private static bool TryGetColor(JsonElement element, string name, string current, out string value)
+    {
+        if (!TryGetString(element, name, current, out value))
+        {
+            return false;
+        }
+
+        return !element.TryGetProperty(name, out _) || OverlaySettings.IsHexColor(value);
     }
 
     private static bool TryGetBool(JsonElement element, string name, bool current, out bool value)

@@ -17,7 +17,17 @@
     showKeyboard: true,
     showMouse: true,
     overlayVisible: true,
-    fadeMilliseconds: 1200
+    fadeMilliseconds: 1200,
+    positionX: 0,
+    positionY: 100,
+    layoutScalePercent: 150,
+    fontFamily: "Segoe UI",
+    fontSize: 16,
+    textColor: "#F1F4F8",
+    accentColor: "#71E0B2",
+    keyColor: "#293342",
+    panelColor: "#0E1219",
+    panelOpacity: 86
   };
   let socket;
   let reconnectTimer;
@@ -27,6 +37,8 @@
   controlPage.hidden = isOverlay;
   overlayPage.hidden = !isOverlay;
   document.body.classList.toggle("overlay-mode", isOverlay);
+  document.getElementById("overlayUrl").textContent =
+    `http://127.0.0.1:${window.location.port || 80}/?mode=overlay`;
   buildKeyboard();
   renderSettings();
   connect();
@@ -104,9 +116,35 @@
       document.getElementById("showMouse").checked = settings.showMouse;
       document.getElementById("fadeMilliseconds").value = settings.fadeMilliseconds;
       document.getElementById("fadeValue").textContent = `${settings.fadeMilliseconds} ms`;
+      document.getElementById("positionX").value = settings.positionX;
+      document.getElementById("positionXValue").textContent = `${settings.positionX}%`;
+      document.getElementById("positionY").value = settings.positionY;
+      document.getElementById("positionYValue").textContent = `${settings.positionY}%`;
+      document.getElementById("layoutScalePercent").value = settings.layoutScalePercent;
+      document.getElementById("layoutScaleValue").textContent = `${settings.layoutScalePercent}%`;
+      document.getElementById("fontFamily").value = settings.fontFamily;
+      document.getElementById("fontSize").value = settings.fontSize;
+      document.getElementById("fontSizeValue").textContent = `${settings.fontSize} px`;
+      document.getElementById("textColor").value = settings.textColor;
+      document.getElementById("accentColor").value = settings.accentColor;
+      document.getElementById("keyColor").value = settings.keyColor;
+      document.getElementById("panelColor").value = settings.panelColor;
+      document.getElementById("panelOpacity").value = settings.panelOpacity;
+      document.getElementById("panelOpacityValue").textContent = `${settings.panelOpacity}%`;
       document.getElementById("toggleOverlay").textContent = settings.overlayVisible ? "Hide overlay" : "Show overlay";
     }
 
+    overlayPage.style.setProperty("--overlay-x", `${settings.positionX}%`);
+    overlayPage.style.setProperty("--overlay-y", `${settings.positionY}%`);
+    overlayPage.style.setProperty("--overlay-x-offset", `${settings.positionX}%`);
+    overlayPage.style.setProperty("--overlay-y-offset", `${settings.positionY}%`);
+    overlayPage.style.setProperty("--overlay-scale", String(settings.layoutScalePercent / 100));
+    overlayPage.style.setProperty("--overlay-font-family", JSON.stringify(settings.fontFamily));
+    overlayPage.style.setProperty("--overlay-font-size", `${settings.fontSize}px`);
+    overlayPage.style.setProperty("--overlay-text-color", settings.textColor);
+    overlayPage.style.setProperty("--overlay-accent-color", settings.accentColor);
+    overlayPage.style.setProperty("--overlay-key-color", settings.keyColor);
+    overlayPage.style.setProperty("--overlay-panel-background", `${settings.panelColor}${alphaHex(settings.panelOpacity)}`);
     overlayContent.hidden = !settings.overlayVisible;
     if (!settings.showKeyboard || !settings.overlayVisible) {
       clearKeyboardState();
@@ -119,6 +157,10 @@
     document.getElementById("textView").hidden = settings.displayMode !== "text";
     document.getElementById("keyboardView").hidden = settings.displayMode !== "keyboard";
     overlayPage.classList.toggle("text-mode", settings.displayMode === "text");
+  }
+
+  function alphaHex(percent) {
+    return Math.round((percent / 100) * 255).toString(16).padStart(2, "0");
   }
 
   function sendSettings(update) {
@@ -153,6 +195,32 @@
       document.getElementById("fadeValue").textContent = `${milliseconds} ms`;
       sendSettings({ fadeMilliseconds: milliseconds });
     });
+    for (const [id, setting, format] of [
+      ["positionX", "positionX", (value) => `${value}%`],
+      ["positionY", "positionY", (value) => `${value}%`],
+      ["layoutScalePercent", "layoutScalePercent", (value) => `${value}%`],
+      ["fontSize", "fontSize", (value) => `${value} px`],
+      ["panelOpacity", "panelOpacity", (value) => `${value}%`]
+    ]) {
+      document.getElementById(id).addEventListener("input", (event) => {
+        const value = Number(event.target.value);
+        const outputId = id === "positionX" ? "positionXValue"
+          : id === "positionY" ? "positionYValue"
+          : id === "layoutScalePercent" ? "layoutScaleValue"
+          : id === "fontSize" ? "fontSizeValue"
+          : "panelOpacityValue";
+        document.getElementById(outputId).textContent = format(value);
+        sendSettings({ [setting]: value });
+      });
+    }
+    document.getElementById("fontFamily").addEventListener("change", (event) => {
+      sendSettings({ fontFamily: event.target.value });
+    });
+    for (const id of ["textColor", "accentColor", "keyColor", "panelColor"]) {
+      document.getElementById(id).addEventListener("input", (event) => {
+        sendSettings({ [id]: event.target.value.toUpperCase() });
+      });
+    }
     document.getElementById("toggleOverlay").addEventListener("click", () => {
       sendSettings({ overlayVisible: !settings.overlayVisible });
     });

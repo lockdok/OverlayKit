@@ -20,7 +20,9 @@ OverlayKit is a Windows companion app that captures global keyboard and mouse ac
    `http://127.0.0.1:17893/?mode=overlay`
 5. Set the source dimensions to fit your scene. Keep the companion app running while the source is in use.
 
-The control page lets you switch between a compact text display and a highlighted keyboard layout, show or hide the keyboard and mouse independently, set the fade time for recent input, and hide or show the overlay. Settings are stored in `%LOCALAPPDATA%\OverlayKit\settings.json`. Existing settings in `%LOCALAPPDATA%\OBSInputOverlay\settings.json` are migrated automatically when OverlayKit starts.
+The control page lets you switch between a compact text display and a highlighted keyboard layout, show or hide the keyboard and mouse independently, and set the fade time for recent input. Adjust horizontal and vertical position within the OBS Browser source, resize the layout, and customize its font family, font size, text, accent, and key colors, panel color, and panel opacity. Position sliders align the corresponding point on the overlay with that percentage of the source, so it stays on-screen when resized. Settings are stored in `%LOCALAPPDATA%\OverlayKit\settings.json`. Existing settings in `%LOCALAPPDATA%\OBSInputOverlay\settings.json` are migrated automatically when OverlayKit starts.
+
+For troubleshooting a port conflict, set the `OVERLAYKIT_PORT` environment variable to an available port from `1024` to `65535` before starting the app. The control page shows the matching OBS Browser source URL.
 
 Mouse clicks (LMB, MMB, RMB) highlight their corresponding area on the mouse diagram. Vertical and horizontal scroll direction is shown briefly next to it.
 

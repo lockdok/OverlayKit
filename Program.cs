@@ -26,8 +26,8 @@ internal static class Program
             await using var server = new OverlayServer();
             using var capture = new InputCapture(server.PublishFromHook);
             Console.WriteLine("OverlayKit is running.");
-            Console.WriteLine("Control panel: http://127.0.0.1:17893/");
-            Console.WriteLine("OBS browser source: http://127.0.0.1:17893/?mode=overlay");
+            Console.WriteLine($"Control panel: http://127.0.0.1:{server.Port}/");
+            Console.WriteLine($"OBS browser source: http://127.0.0.1:{server.Port}/?mode=overlay");
             Console.WriteLine("Press Ctrl+C to stop.");
             await server.RunAsync(shutdown.Token);
         }
