@@ -6,10 +6,12 @@
     <Nullable>enable</Nullable>
     <AssemblyName>OverlayKit</AssemblyName>
     <RootNamespace>OverlayKit</RootNamespace>
+    <Version>0.1.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <Content Include="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
 </Project>

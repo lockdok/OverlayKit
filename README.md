@@ -45,3 +45,9 @@ dotnet build -c Release
 ```
 
 The browser-source files are copied next to the app in the build output. The app listens only on loopback at `127.0.0.1:17893`; if the port is in use, close the other app using it before starting this one.
+
+## Download a release
+
+Download the latest **OverlayKit-windows-x64** ZIP from the [GitHub Releases page](https://github.com/lockdok/OverlayKit/releases/latest). Extract the whole ZIP to a folder and run `OverlayKit.exe`. This is a self-contained Windows x64 build and does not require a separate .NET installation. Keep the `wwwroot` folder next to the executable; it contains the control page and OBS overlay files.
+
+The OBS Browser source URL remains `http://127.0.0.1:17893/?mode=overlay`. Keep OverlayKit running while the source is in use.
