@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>OverlayKit</AssemblyName>
     <RootNamespace>OverlayKit</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="OverlayKit.Tests" />
