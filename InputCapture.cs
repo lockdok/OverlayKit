@@ -20,7 +20,7 @@ internal sealed class InputCapture : IDisposable
     private const int WmMouseWheel = 0x020A;
     private const int WmMouseHWheel = 0x020E;
 
-    private readonly Action<object> _publish;
+    private readonly Action<InputEvent> _publish;
     private readonly Thread _messageThread;
     private readonly ManualResetEventSlim _started = new();
     private readonly HashSet<uint> _pressedKeys = new();
@@ -31,8 +31,9 @@ internal sealed class InputCapture : IDisposable
     private IntPtr _mouseHook;
     private uint _threadId;
     private Exception? _startupError;
+    private int _disposed;
 
-    public InputCapture(Action<object> publish)
+    public InputCapture(Action<InputEvent> publish)
     {
         _publish = publish;
         _messageThread = new Thread(MessageLoop)
@@ -115,15 +116,22 @@ internal sealed class InputCapture : IDisposable
     {
         if (code >= 0)
         {
-            var message = wParam.ToInt32();
-            var key = Marshal.PtrToStructure<KeyboardData>(lParam);
-            if (message is WmKeyDown or WmSysKeyDown)
+            try
             {
-                HandleKeyDown(key.VirtualKey);
+                var message = wParam.ToInt32();
+                var key = Marshal.PtrToStructure<KeyboardData>(lParam);
+                if (message is WmKeyDown or WmSysKeyDown)
+                {
+                    HandleKeyDown(key.VirtualKey);
+                }
+                else if (message is WmKeyUp or WmSysKeyUp)
+                {
+                    HandleKeyUp(key.VirtualKey);
+                }
             }
-            else if (message is WmKeyUp or WmSysKeyUp)
+            catch
             {
-                HandleKeyUp(key.VirtualKey);
+                // Prevent unhandled managed exceptions from escaping into the native Win32 hook procedure.
             }
         }
 
@@ -140,11 +148,12 @@ internal sealed class InputCapture : IDisposable
         var allowed = IsModifier(key)
             || key is >= 0x70 and <= 0x7B
             || !IsPrintable(key)
-            || _pressedKeys.Any(IsShortcutModifier);
+            || (HasShortcutModifier()
+                && !(_pressedKeys.Contains(0xA5) && _pressedKeys.Contains(0xA2)));
 
         if (allowed && _shownKeys.Add(key))
         {
-            _publish(new { type = "key", phase = "down", vk = key, label = GetKeyLabel(key) });
+            _publish(new InputEvent("key", "down", key, GetKeyLabel(key)));
         }
     }
 
@@ -153,7 +162,7 @@ internal sealed class InputCapture : IDisposable
         _pressedKeys.Remove(key);
         if (_shownKeys.Remove(key))
         {
-            _publish(new { type = "key", phase = "up", vk = key, label = GetKeyLabel(key) });
+            _publish(new InputEvent("key", "up", key, GetKeyLabel(key)));
         }
     }
 
@@ -161,34 +170,41 @@ internal sealed class InputCapture : IDisposable
     {
         if (code >= 0)
         {
-            var message = wParam.ToInt32();
-            var mouse = Marshal.PtrToStructure<MouseData>(lParam);
-            switch (message)
+            try
             {
-                case WmLButtonDown:
-                case WmLButtonUp:
-                    PublishMouse("left", message == WmLButtonDown ? "down" : "up");
-                    break;
-                case WmMButtonDown:
-                case WmMButtonUp:
-                    PublishMouse("middle", message == WmMButtonDown ? "down" : "up");
-                    break;
-                case WmRButtonDown:
-                case WmRButtonUp:
-                    PublishMouse("right", message == WmRButtonDown ? "down" : "up");
-                    break;
-                case WmMouseWheel:
-                case WmMouseHWheel:
-                    var delta = unchecked((short)((mouse.Data >> 16) & 0xFFFF));
-                    if (delta != 0)
-                    {
-                        var horizontal = message == WmMouseHWheel;
-                        var direction = horizontal
-                            ? delta > 0 ? "right" : "left"
-                            : delta > 0 ? "up" : "down";
-                        _publish(new { type = "scroll", direction, horizontal });
-                    }
-                    break;
+                var message = wParam.ToInt32();
+                var mouse = Marshal.PtrToStructure<MouseData>(lParam);
+                switch (message)
+                {
+                    case WmLButtonDown:
+                    case WmLButtonUp:
+                        PublishMouse("left", message == WmLButtonDown ? "down" : "up");
+                        break;
+                    case WmMButtonDown:
+                    case WmMButtonUp:
+                        PublishMouse("middle", message == WmMButtonDown ? "down" : "up");
+                        break;
+                    case WmRButtonDown:
+                    case WmRButtonUp:
+                        PublishMouse("right", message == WmRButtonDown ? "down" : "up");
+                        break;
+                    case WmMouseWheel:
+                    case WmMouseHWheel:
+                        var delta = unchecked((short)((mouse.Data >> 16) & 0xFFFF));
+                        if (delta != 0)
+                        {
+                            var horizontal = message == WmMouseHWheel;
+                            var direction = horizontal
+                                ? delta > 0 ? "right" : "left"
+                                : delta > 0 ? "up" : "down";
+                            _publish(new InputEvent("scroll", Direction: direction, Horizontal: horizontal));
+                        }
+                        break;
+                }
+            }
+            catch
+            {
+                // Prevent unhandled managed exceptions from escaping into the native Win32 hook procedure.
             }
         }
 
@@ -196,13 +212,33 @@ internal sealed class InputCapture : IDisposable
     }
 
     private void PublishMouse(string button, string phase) =>
-        _publish(new { type = "mouse", button, phase });
+        _publish(new InputEvent("mouse", phase, Button: button));
+
+    private bool HasShortcutModifier()
+    {
+        ReadOnlySpan<uint> modifiers = [0x11, 0x12, 0x5B, 0x5C, 0xA2, 0xA3, 0xA4, 0xA5];
+        foreach (var mod in modifiers)
+        {
+            if (_pressedKeys.Contains(mod))
+            {
+                if (IsKeyPhysicallyDown((int)mod))
+                {
+                    return true;
+                }
+
+                // The modifier was physically released while low-level hooks were bypassed/paused.
+                _pressedKeys.Remove(mod);
+                _shownKeys.Remove(mod);
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsKeyPhysicallyDown(int vKey) => (GetAsyncKeyState(vKey) & 0x8000) != 0;
 
     private static bool IsModifier(uint key) =>
         key is 0x10 or 0x11 or 0x12 or 0x5B or 0x5C or 0xA0 or 0xA1 or 0xA2 or 0xA3 or 0xA4 or 0xA5;
-
-    private static bool IsShortcutModifier(uint key) =>
-        key is 0x11 or 0x12 or 0x5B or 0x5C or 0xA2 or 0xA3 or 0xA4 or 0xA5;
 
     private static bool IsPrintable(uint key) =>
         key is >= 0x30 and <= 0x39
@@ -244,6 +280,8 @@ internal sealed class InputCapture : IDisposable
             0x10 or 0xA0 or 0xA1 => "Shift",
             0x11 or 0xA2 or 0xA3 => "Ctrl",
             0x12 or 0xA4 or 0xA5 => "Alt",
+            0x13 => "Pause",
+            0x14 => "Caps",
             0x1B => "Esc",
             0x20 => "Space",
             0x21 => "Page Up",
@@ -254,9 +292,18 @@ internal sealed class InputCapture : IDisposable
             0x26 => "Up",
             0x27 => "Right",
             0x28 => "Down",
+            0x2C => "Print Screen",
             0x2D => "Insert",
             0x2E => "Delete",
             0x5B or 0x5C => "Win",
+            0x6A => "Num *",
+            0x6B => "Num +",
+            0x6C => "Num ,",
+            0x6D => "Num -",
+            0x6E => "Num .",
+            0x6F => "Num /",
+            0x90 => "Num Lock",
+            0x91 => "Scroll Lock",
             0xBA => ";",
             0xBB => "=",
             0xBC => ",",
@@ -275,6 +322,11 @@ internal sealed class InputCapture : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
         if (_threadId != 0)
         {
             PostThreadMessage(_threadId, WmQuit, IntPtr.Zero, IntPtr.Zero);
@@ -358,4 +410,7 @@ internal sealed class InputCapture : IDisposable
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool PostThreadMessage(uint threadId, uint message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
 }

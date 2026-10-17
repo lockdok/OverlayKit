@@ -242,6 +242,7 @@ input[type="range"] {
   transform: scale(var(--overlay-scale, 1.5))
     translate(calc(var(--overlay-x-offset, 0%) * -1), calc(var(--overlay-y-offset, 100%) * -1));
   transform-origin: top left;
+  contain: layout paint style;
 }
 
 .keyboard-panel,
@@ -250,8 +251,7 @@ input[type="range"] {
   border: 1px solid rgb(255 255 255 / 15%);
   border-radius: 12px;
   background: var(--overlay-panel-background, #0e1219db);
-  box-shadow: 0 8px 28px rgb(0 0 0 / 30%);
-  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 24%);
 }
 
 .view-label {

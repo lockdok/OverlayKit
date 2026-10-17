@@ -9,6 +9,12 @@
     <Version>0.2.0</Version>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="OverlayKit.Tests" />
+    <Compile Remove="tests\**" />
+    <EmbeddedResource Remove="tests\**" />
+    <None Remove="tests\**" />
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

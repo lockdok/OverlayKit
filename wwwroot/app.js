@@ -9,6 +9,7 @@
   const overlayConnection = document.getElementById("overlayConnection");
   const controlError = document.getElementById("controlError");
   const heldKeys = new Map();
+  const keyboardKeys = new Map();
   const recentTimers = new Set();
   const keyboardTimers = new Map();
 
@@ -33,6 +34,8 @@
   let reconnectTimer;
   let mouseTimer;
   let scrollTimer;
+  let settingsSaveTimer;
+  let pendingSettings = {};
 
   controlPage.hidden = isOverlay;
   overlayPage.hidden = !isOverlay;
@@ -49,6 +52,7 @@
 
     socket.addEventListener("open", () => {
       setConnectionState(true);
+      flushSettings();
     });
     socket.addEventListener("message", (event) => {
       try {
@@ -157,18 +161,36 @@
     document.getElementById("textView").hidden = settings.displayMode !== "text";
     document.getElementById("keyboardView").hidden = settings.displayMode !== "keyboard";
     overlayPage.classList.toggle("text-mode", settings.displayMode === "text");
+    if (settings.displayMode === "text") {
+      renderHeldKeys();
+    }
   }
 
   function alphaHex(percent) {
     return Math.round((percent / 100) * 255).toString(16).padStart(2, "0");
   }
 
-  function sendSettings(update) {
+  function previewSettings(update) {
     settings = { ...settings, ...update };
     renderSettings();
+  }
+
+  function sendSettings(update) {
+    settings = { ...settings, ...update };
+    pendingSettings = { ...pendingSettings, ...update };
+    renderSettings();
     showError("");
+    clearTimeout(settingsSaveTimer);
+    settingsSaveTimer = setTimeout(flushSettings, 180);
+  }
+
+  function flushSettings() {
+    if (!Object.keys(pendingSettings).length) {
+      return;
+    }
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "settings", settings: update }));
+      socket.send(JSON.stringify({ type: "settings", settings: pendingSettings }));
+      pendingSettings = {};
     } else {
       showError("The companion app is disconnected; settings were not saved.");
     }
@@ -193,7 +215,10 @@
     document.getElementById("fadeMilliseconds").addEventListener("input", (event) => {
       const milliseconds = Number(event.target.value);
       document.getElementById("fadeValue").textContent = `${milliseconds} ms`;
-      sendSettings({ fadeMilliseconds: milliseconds });
+      previewSettings({ fadeMilliseconds: milliseconds });
+    });
+    document.getElementById("fadeMilliseconds").addEventListener("change", (event) => {
+      sendSettings({ fadeMilliseconds: Number(event.target.value) });
     });
     for (const [id, setting, format] of [
       ["positionX", "positionX", (value) => `${value}%`],
@@ -210,14 +235,17 @@
           : id === "fontSize" ? "fontSizeValue"
           : "panelOpacityValue";
         document.getElementById(outputId).textContent = format(value);
-        sendSettings({ [setting]: value });
+        previewSettings({ [setting]: value });
+      });
+      document.getElementById(id).addEventListener("change", (event) => {
+        sendSettings({ [setting]: Number(event.target.value) });
       });
     }
     document.getElementById("fontFamily").addEventListener("change", (event) => {
       sendSettings({ fontFamily: event.target.value });
     });
     for (const id of ["textColor", "accentColor", "keyColor", "panelColor"]) {
-      document.getElementById(id).addEventListener("input", (event) => {
+      document.getElementById(id).addEventListener("change", (event) => {
         sendSettings({ [id]: event.target.value.toUpperCase() });
       });
     }
@@ -240,7 +268,8 @@
       return;
     }
 
-    const key = { vk: Number(message.vk), label: message.label };
+    const vk = Number(message.vk ?? message.virtualKey);
+    const key = { vk, label: message.label };
     if (message.phase === "down") {
       heldKeys.set(key.vk, key);
       addRecentKey(key);
@@ -248,7 +277,9 @@
       heldKeys.delete(key.vk);
     }
 
-    renderHeldKeys();
+    if (settings.displayMode === "text") {
+      renderHeldKeys();
+    }
     for (const keyElement of findKeyboardKeys(key.vk)) {
       keyElement.classList.toggle("pressed", message.phase === "down");
     }
@@ -261,7 +292,7 @@
       0x12: [0xA4, 0xA5]
     };
     const codes = aliases[vk] || [vk];
-    return codes.flatMap((code) => Array.from(document.querySelectorAll(`[data-vk="${code}"]`)));
+    return codes.flatMap((code) => keyboardKeys.get(code) || []);
   }
 
   function renderHeldKeys() {
@@ -282,6 +313,9 @@
     chip.className = "recent-key";
     chip.textContent = key.label;
     container.append(chip);
+    while (container.childElementCount > 12) {
+      container.firstElementChild.remove();
+    }
 
     const timer = setTimeout(() => {
       chip.remove();
@@ -345,7 +379,7 @@
         ["F9", 0x78], ["F10", 0x79], ["F11", 0x7A], ["F12", 0x7B]
       ],
       [
-        ["1", 0x31], ["2", 0x32], ["3", 0x33], ["4", 0x34], ["5", 0x35], ["6", 0x36],
+        ["`", 0xC0], ["1", 0x31], ["2", 0x32], ["3", 0x33], ["4", 0x34], ["5", 0x35], ["6", 0x36],
         ["7", 0x37], ["8", 0x38], ["9", 0x39], ["0", 0x30], ["-", 0xBD], ["=", 0xBB],
         ["Back", 0x08, "wide"]
       ],
@@ -379,6 +413,9 @@
         key.className = `keyboard-key ${size}`.trim();
         key.dataset.vk = String(vk);
         key.textContent = label;
+        const keys = keyboardKeys.get(vk) || [];
+        keys.push(key);
+        keyboardKeys.set(vk, keys);
         rowElement.append(key);
       }
       layout.append(rowElement);
@@ -415,8 +452,9 @@
     const label = document.getElementById("scrollLabel");
     label.textContent = `${direction} Scroll${axis}`;
     label.classList.remove("scroll-pulse");
-    void label.offsetWidth;
-    label.classList.add("scroll-pulse");
+    requestAnimationFrame(() => {
+      label.classList.add("scroll-pulse");
+    });
     clearTimeout(scrollTimer);
     scrollTimer = setTimeout(() => { label.textContent = ""; }, settings.fadeMilliseconds);
   }

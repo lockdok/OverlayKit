@@ -33,8 +33,9 @@ internal static class Program
         }
         catch (SocketException ex)
         {
+            var port = Environment.GetEnvironmentVariable("OVERLAYKIT_PORT") ?? "17893";
             Console.Error.WriteLine($"Could not start the local web server: {ex.Message}");
-            Console.Error.WriteLine("Check whether port 17893 is already in use.");
+            Console.Error.WriteLine($"Check whether port {port} is already in use.");
             Environment.ExitCode = 1;
         }
         catch (Exception ex)

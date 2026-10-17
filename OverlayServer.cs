@@ -5,6 +5,8 @@ using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading.Channels;
 
 namespace OverlayKit;
 
@@ -12,8 +14,20 @@ internal sealed class OverlayServer : IAsyncDisposable
 {
     private const int MaxMessageSize = 16 * 1024;
     private const int MaxHeaderSize = 16 * 1024;
+    private const int MaxConcurrentConnections = 16;
+    private const int MaxQueuedMessagesPerClient = 512;
+    private const int MaxQueuedInputEvents = 256;
+    private static readonly TimeSpan RequestHeaderTimeout = TimeSpan.FromSeconds(5);
     private readonly TcpListener _listener;
+    private readonly SemaphoreSlim _connectionSlots = new(MaxConcurrentConnections);
     private readonly ConcurrentDictionary<Guid, BrowserClient> _clients = new();
+    private readonly Channel<InputEvent> _inputEvents = Channel.CreateBounded<InputEvent>(
+        new BoundedChannelOptions(MaxQueuedInputEvents)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = false
+        });
     private readonly object _settingsLock = new();
     private OverlaySettings _settings = OverlaySettings.Load();
 
@@ -38,41 +52,66 @@ internal sealed class OverlayServer : IAsyncDisposable
         _listener.Start();
         Console.WriteLine($"Local server listening at http://127.0.0.1:{Port}/");
         using var registration = cancellationToken.Register(_listener.Stop);
+        using var inputDispatcherStop = cancellationToken.Register(() => _inputEvents.Writer.TryComplete());
+        var inputDispatcher = DispatchInputEventsAsync();
 
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            TcpClient client;
-            try
-            {
-                client = await _listener.AcceptTcpClientAsync(cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (SocketException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-
-            _ = HandleClientAsync(client);
-        }
-    }
-
-    public void PublishFromHook(object message)
-    {
-        _ = PublishSafelyAsync(message);
-    }
-
-    private async Task PublishSafelyAsync(object message)
-    {
         try
         {
-            await BroadcastAsync(message);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await _connectionSlots.WaitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                TcpClient client;
+                try
+                {
+                    client = await _listener.AcceptTcpClientAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    _connectionSlots.Release();
+                    break;
+                }
+                catch (SocketException) when (cancellationToken.IsCancellationRequested)
+                {
+                    _connectionSlots.Release();
+                    break;
+                }
+                catch
+                {
+                    _connectionSlots.Release();
+                    throw;
+                }
+
+                _ = HandleClientAsync(client);
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            Console.Error.WriteLine($"Could not publish an input event: {ex.Message}");
+            _inputEvents.Writer.TryComplete();
+            await inputDispatcher;
+        }
+    }
+
+    public void PublishFromHook(InputEvent message)
+    {
+        if (!_clients.IsEmpty)
+        {
+            _inputEvents.Writer.TryWrite(message);
+        }
+    }
+
+    private async Task DispatchInputEventsAsync()
+    {
+        await foreach (var message in _inputEvents.Reader.ReadAllAsync())
+        {
+            Broadcast(Serialize(message));
         }
     }
 
@@ -83,10 +122,10 @@ internal sealed class OverlayServer : IAsyncDisposable
             try
             {
                 var stream = client.GetStream();
-                var request = await ReadRequestAsync(stream);
+                var (request, requestStream) = await ReadRequestAsync(stream);
                 if (request.Method != "GET")
                 {
-                    await WriteResponseAsync(stream, "405 Method Not Allowed", "text/plain; charset=utf-8", "Method not allowed.");
+                    await WriteResponseAsync(requestStream, "405 Method Not Allowed", "text/plain; charset=utf-8", "Method not allowed.");
                     return;
                 }
 
@@ -94,61 +133,91 @@ internal sealed class OverlayServer : IAsyncDisposable
                     && request.Headers.TryGetValue("Upgrade", out var upgrade)
                     && upgrade.Equals("websocket", StringComparison.OrdinalIgnoreCase))
                 {
-                    await HandleWebSocketAsync(stream, request.Headers);
+                    await HandleWebSocketAsync(requestStream, request.Headers);
                     return;
                 }
 
-                await ServeFileAsync(stream, request.Path);
+                await ServeFileAsync(requestStream, request.Path);
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"Browser connection failed: {ex.Message}");
             }
+            finally
+            {
+                _connectionSlots.Release();
+            }
         }
     }
 
-    private static async Task<BrowserRequest> ReadRequestAsync(NetworkStream stream)
+    private static async Task<(BrowserRequest Request, Stream Stream)> ReadRequestAsync(NetworkStream stream)
     {
+        using var timeout = new CancellationTokenSource(RequestHeaderTimeout);
         using var headers = new MemoryStream();
-        var oneByte = new byte[1];
-        var complete = false;
+        var buffer = new byte[1024];
+        var delimiterIndex = -1;
+
         while (headers.Length < MaxHeaderSize)
         {
-            var count = await stream.ReadAsync(oneByte, 0, 1);
+            var count = await stream.ReadAsync(buffer.AsMemory(), timeout.Token);
             if (count == 0)
             {
                 throw new IOException("The browser disconnected before sending an HTTP request.");
             }
 
-            headers.WriteByte(oneByte[0]);
-            if (headers.Length >= 4)
+            var previousLength = (int)headers.Length;
+            headers.Write(buffer, 0, count);
+
+            var currentBytes = headers.GetBuffer();
+            var totalLength = (int)headers.Length;
+            var searchStart = Math.Max(0, previousLength - 3);
+            for (var i = searchStart; i <= totalLength - 4; i++)
             {
-                var bytes = headers.GetBuffer();
-                var length = (int)headers.Length;
-                if (bytes[length - 4] == '\r' && bytes[length - 3] == '\n'
-                    && bytes[length - 2] == '\r' && bytes[length - 1] == '\n')
+                if (currentBytes[i] == '\r' && currentBytes[i + 1] == '\n'
+                    && currentBytes[i + 2] == '\r' && currentBytes[i + 3] == '\n')
                 {
-                    complete = true;
+                    delimiterIndex = i;
                     break;
                 }
             }
+
+            if (delimiterIndex >= 0)
+            {
+                break;
+            }
         }
 
-        if (!complete)
+        if (delimiterIndex < 0)
         {
             throw new InvalidDataException("The HTTP request headers exceeded the size limit.");
         }
 
-        var lines = Encoding.ASCII.GetString(headers.ToArray()).Split("\r\n", StringSplitOptions.None);
+        var headerBytes = headers.ToArray();
+        var lines = Encoding.ASCII.GetString(headerBytes, 0, delimiterIndex).Split("\r\n", StringSplitOptions.None);
         var requestLine = lines[0].Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
         if (requestLine.Length != 3)
         {
             throw new FormatException("The browser sent a malformed HTTP request line.");
         }
 
-        if (!Uri.TryCreate($"http://127.0.0.1{requestLine[1]}", UriKind.Absolute, out var uri))
+        var rawTarget = requestLine[1];
+        string path;
+        if (rawTarget.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || rawTarget.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
-            throw new FormatException("The browser sent an invalid request path.");
+            if (!Uri.TryCreate(rawTarget, UriKind.Absolute, out var absoluteUri))
+            {
+                throw new FormatException("The browser sent an invalid request path.");
+            }
+            path = absoluteUri.AbsolutePath;
+        }
+        else
+        {
+            if (!Uri.TryCreate($"http://127.0.0.1{rawTarget}", UriKind.Absolute, out var uri))
+            {
+                throw new FormatException("The browser sent an invalid request path.");
+            }
+            path = uri.AbsolutePath;
         }
 
         var parsedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -161,10 +230,16 @@ internal sealed class OverlayServer : IAsyncDisposable
             }
         }
 
-        return new BrowserRequest(requestLine[0], uri.AbsolutePath, parsedHeaders);
+        var request = new BrowserRequest(requestLine[0], path, parsedHeaders);
+        var remainingBytesLength = (int)headers.Length - (delimiterIndex + 4);
+        Stream effectiveStream = remainingBytesLength > 0
+            ? new PrefixedStream(headerBytes.AsMemory(delimiterIndex + 4, remainingBytesLength).ToArray(), stream)
+            : stream;
+
+        return (request, effectiveStream);
     }
 
-    private static async Task ServeFileAsync(NetworkStream stream, string path)
+    private static async Task ServeFileAsync(Stream stream, string path)
     {
         var fileName = path switch
         {
@@ -199,12 +274,12 @@ internal sealed class OverlayServer : IAsyncDisposable
         await WriteResponseAsync(stream, "200 OK", contentType, body);
     }
 
-    private static async Task WriteResponseAsync(NetworkStream stream, string status, string contentType, string content)
+    private static async Task WriteResponseAsync(Stream stream, string status, string contentType, string content)
     {
         await WriteResponseAsync(stream, status, contentType, Encoding.UTF8.GetBytes(content));
     }
 
-    private static async Task WriteResponseAsync(NetworkStream stream, string status, string contentType, byte[] body)
+    private static async Task WriteResponseAsync(Stream stream, string status, string contentType, byte[] body)
     {
         var headers = Encoding.ASCII.GetBytes(
             $"HTTP/1.1 {status}\r\nContent-Type: {contentType}\r\nContent-Length: {body.Length}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
@@ -213,10 +288,10 @@ internal sealed class OverlayServer : IAsyncDisposable
         await stream.FlushAsync();
     }
 
-    private async Task HandleWebSocketAsync(NetworkStream stream, IReadOnlyDictionary<string, string> headers)
+    private async Task HandleWebSocketAsync(Stream stream, IReadOnlyDictionary<string, string> headers)
     {
         if (!headers.TryGetValue("Origin", out var origin)
-            || !origin.Equals($"http://127.0.0.1:{Port}", StringComparison.OrdinalIgnoreCase))
+            || !IsAllowedOrigin(origin, Port))
         {
             await WriteResponseAsync(stream, "403 Forbidden", "text/plain; charset=utf-8", "WebSocket origin is not allowed.");
             return;
@@ -245,19 +320,28 @@ internal sealed class OverlayServer : IAsyncDisposable
 
         using var socket = WebSocket.CreateFromStream(stream, true, null, TimeSpan.FromSeconds(30));
         var id = Guid.NewGuid();
-        var client = new BrowserClient(socket);
+        var client = new BrowserClient(socket, MaxQueuedMessagesPerClient);
         _clients[id] = client;
         Console.WriteLine($"Browser connected ({_clients.Count} connected).");
 
+        var sendLoop = client.SendLoopAsync();
         try
         {
-            await client.SendAsync(new { type = "settings", settings = GetSettings() });
+            client.Send(Serialize(new { type = "settings", settings = GetSettings() }));
             await ReceiveMessagesAsync(id, client);
         }
         finally
         {
             _clients.TryRemove(id, out _);
             client.Dispose();
+            try
+            {
+                await sendLoop;
+            }
+            catch (Exception ex) when (ex is WebSocketException or ObjectDisposedException or OperationCanceledException)
+            {
+                // The connection is already being torn down.
+            }
             Console.WriteLine($"Browser disconnected ({_clients.Count} connected).");
         }
     }
@@ -283,7 +367,7 @@ internal sealed class OverlayServer : IAsyncDisposable
 
                 if (result.MessageType != WebSocketMessageType.Text)
                 {
-                    await client.SendAsync(new { type = "error", message = "Only text WebSocket messages are supported." });
+                client.Send(Serialize(new { type = "error", message = "Only text WebSocket messages are supported." }));
                     await client.Socket.CloseAsync(
                         WebSocketCloseStatus.InvalidMessageType,
                         "Text messages are required",
@@ -294,21 +378,20 @@ internal sealed class OverlayServer : IAsyncDisposable
                 message.Write(buffer, 0, result.Count);
                 if (message.Length > MaxMessageSize)
                 {
-                    await client.SendAsync(new { type = "error", message = "The message exceeded the size limit." });
+                    client.Send(Serialize(new { type = "error", message = "The message exceeded the size limit." }));
+                    await client.Socket.CloseAsync(
+                        WebSocketCloseStatus.MessageTooBig,
+                        "The message exceeded the size limit.",
+                        CancellationToken.None);
                     return;
                 }
             } while (!result.EndOfMessage);
 
-            if (result.MessageType != WebSocketMessageType.Text || message.Length > MaxMessageSize)
-            {
-                continue;
-            }
-
-            await ApplyCommandAsync(id, client, message.ToArray());
+            ApplyCommand(id, client, message.ToArray());
         }
     }
 
-    private async Task ApplyCommandAsync(Guid id, BrowserClient client, byte[] bytes)
+    private void ApplyCommand(Guid id, BrowserClient client, byte[] bytes)
     {
         try
         {
@@ -319,14 +402,14 @@ internal sealed class OverlayServer : IAsyncDisposable
                 || type.ValueKind != JsonValueKind.String
                 || type.GetString() != "settings")
             {
-                await client.SendAsync(new { type = "error", message = "Unsupported command.", settings = GetSettings() });
+                client.Send(Serialize(new { type = "error", message = "Unsupported command.", settings = GetSettings() }));
                 return;
             }
 
             if (!root.TryGetProperty("settings", out var settingsElement)
                 || settingsElement.ValueKind != JsonValueKind.Object)
             {
-                await client.SendAsync(new { type = "error", message = "Settings must be an object.", settings = GetSettings() });
+                client.Send(Serialize(new { type = "error", message = "Settings must be an object.", settings = GetSettings() }));
                 return;
             }
 
@@ -349,21 +432,21 @@ internal sealed class OverlayServer : IAsyncDisposable
 
             if (validationError is not null)
             {
-                await client.SendAsync(new { type = "error", message = validationError, settings = GetSettings() });
+                client.Send(Serialize(new { type = "error", message = validationError, settings = GetSettings() }));
                 return;
             }
 
-            await BroadcastAsync(new { type = "settings", settings = updated });
+            Broadcast(Serialize(new { type = "settings", settings = updated }));
             Console.WriteLine($"Settings updated by browser {id}.");
         }
         catch (JsonException ex)
         {
-            await client.SendAsync(new { type = "error", message = $"Invalid JSON: {ex.Message}", settings = GetSettings() });
+            client.Send(Serialize(new { type = "error", message = $"Invalid JSON: {ex.Message}", settings = GetSettings() }));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine($"Could not save overlay settings: {ex.Message}");
-            await client.SendAsync(new { type = "error", message = "Settings could not be saved. Check the app data folder permissions.", settings = GetSettings() });
+            client.Send(Serialize(new { type = "error", message = "Settings could not be saved. Check the app data folder permissions.", settings = GetSettings() }));
         }
     }
 
@@ -550,21 +633,43 @@ internal sealed class OverlayServer : IAsyncDisposable
         }
     }
 
-    private async Task BroadcastAsync(object message)
+    private static byte[] Serialize<T>(T message) =>
+        JsonSerializer.SerializeToUtf8Bytes(message, BrowserClient.SerializerOptions);
+
+    internal static bool IsAllowedOrigin(string origin, int port)
+    {
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+        {
+            return false;
+        }
+
+        if (uri.Port != port)
+        {
+            return false;
+        }
+
+        return uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.Equals("[::1]", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.Equals("::1", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void Broadcast(byte[] message)
     {
         var clients = _clients.ToArray();
-        await Task.WhenAll(clients.Select(async item =>
+        foreach (var item in clients)
         {
-            try
-            {
-                await item.Value.SendAsync(message);
-            }
-            catch (Exception ex) when (ex is WebSocketException or ObjectDisposedException)
+            if (item.Value.Socket.State != WebSocketState.Open || !item.Value.Send(message))
             {
                 _clients.TryRemove(item.Key, out _);
                 item.Value.Dispose();
             }
-        }));
+        }
     }
 
     public ValueTask DisposeAsync()
@@ -581,40 +686,137 @@ internal sealed class OverlayServer : IAsyncDisposable
 
     private sealed class BrowserClient : IDisposable
     {
-        private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
-        private readonly SemaphoreSlim _sendLock = new(1, 1);
+        internal static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+        private readonly Channel<byte[]> _outbound;
 
-        public BrowserClient(WebSocket socket)
+        public BrowserClient(WebSocket socket, int queueCapacity)
         {
             Socket = socket;
+            _outbound = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(queueCapacity)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false
+            });
         }
 
         public WebSocket Socket { get; }
 
-        public async Task SendAsync(object message)
+        public bool Send(byte[] payload)
         {
-            var payload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message, SerializerOptions));
-            await _sendLock.WaitAsync();
-            try
+            return _outbound.Writer.TryWrite(payload);
+        }
+
+        public async Task SendLoopAsync()
+        {
+            await foreach (var payload in _outbound.Reader.ReadAllAsync())
             {
-                if (Socket.State == WebSocketState.Open)
+                if (Socket.State != WebSocketState.Open)
                 {
-                    await Socket.SendAsync(
-                        new ArraySegment<byte>(payload),
-                        WebSocketMessageType.Text,
-                        true,
-                        CancellationToken.None);
+                    return;
                 }
-            }
-            finally
-            {
-                _sendLock.Release();
+
+                await Socket.SendAsync(
+                    new ArraySegment<byte>(payload),
+                    WebSocketMessageType.Text,
+                    true,
+                    CancellationToken.None);
             }
         }
 
         public void Dispose()
         {
+            _outbound.Writer.TryComplete();
             Socket.Dispose();
+        }
+    }
+
+    private sealed class PrefixedStream : Stream
+    {
+        private readonly MemoryStream _prefix;
+        private readonly Stream _inner;
+
+        public PrefixedStream(byte[] prefix, Stream inner)
+        {
+            _prefix = new MemoryStream(prefix);
+            _inner = inner;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => _inner.CanWrite;
+        public override long Length => _prefix.Length + _inner.Length;
+        public override long Position
+        {
+            get => _prefix.Position;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => _inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_prefix.Position < _prefix.Length)
+            {
+                var read = _prefix.Read(buffer, offset, count);
+                if (read > 0)
+                {
+                    return read;
+                }
+            }
+
+            return _inner.Read(buffer, offset, count);
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_prefix.Position < _prefix.Length)
+            {
+                var read = await _prefix.ReadAsync(buffer, cancellationToken);
+                if (read > 0)
+                {
+                    return read;
+                }
+            }
+
+            return await _inner.ReadAsync(buffer, cancellationToken);
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (_prefix.Position < _prefix.Length)
+            {
+                var read = _prefix.Read(buffer, offset, count);
+                if (read > 0)
+                {
+                    return Task.FromResult(read);
+                }
+            }
+
+            return _inner.ReadAsync(buffer, offset, count, cancellationToken);
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) => _inner.Write(buffer, offset, count);
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            _inner.WriteAsync(buffer, offset, count, cancellationToken);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            _inner.WriteAsync(buffer, cancellationToken);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _prefix.Dispose();
+                _inner.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
     }
 
